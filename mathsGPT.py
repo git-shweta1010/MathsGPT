@@ -1,16 +1,15 @@
 import streamlit as st
 from langchain_groq import ChatGroq
 from langchain.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSequence
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain.agents import Tool, initialize_agent
 from langchain.agents.agent_types import AgentType
-from langchain.callbacks.streamlit import StreamlitCallbackHandler
 from dotenv import load_dotenv
 
+# Load environment variables (optional, if using .env file)
 load_dotenv()
 
-# Streamlit UI setup
+# ---------------- Streamlit UI ----------------
 st.set_page_config(
     page_title="MathsGPT",
     page_icon="🧠",
@@ -26,17 +25,18 @@ if not groq_api_key:
     st.info("Please provide your Groq API key to continue.")
     st.stop()
 
-# Load LLM
-llm = ChatGroq(model="llama-3.3-70b-versatile", groq_api_key=groq_api_key)
+# ---------------- LLM Setup ----------------
+# Use a smaller model for faster responses (you can switch back to 70B if needed)
+llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=groq_api_key)
 
-# Tools
+# ---------------- Tools ----------------
 wiki_tool = Tool(
     name="Wikipedia",
     func=WikipediaAPIWrapper().run,
-    description="Use this for questions related to current events or general knowledge."
+    description="Use this for general knowledge or current events."
 )
 
-# Math reasoning using prompt | llm pattern
+# Prompt for math reasoning
 prompt = PromptTemplate(
     template="""
 You are a brilliant math teacher. Solve the math problem step by step using logical reasoning.
@@ -50,21 +50,20 @@ You are a brilliant math teacher. Solve the math problem step by step using logi
 📌 Problem:
 {question}
 
-✍️ Detailed Solution:
-"""
-,
-
+✍ Detailed Solution:
+""",
+    input_variables=["question"]
 )
 
 reasoning_chain = prompt | llm
 
 reasoning_tool = Tool(
     name="MathReasoning",
-    func=lambda q: reasoning_chain.invoke({"question": q}).content.strip().split("additional_kwargs")[0],
-    description="Useful for solving math problems with reasoning (including equations)."
+    func=lambda q: reasoning_chain.invoke({"question": q}).content.strip(),
+    description="Useful for solving math problems with step-by-step reasoning."
 )
 
-# Agent initialization (still uses the agent for multi-tool logic)
+# Agent (for non-math queries)
 agent = initialize_agent(
     tools=[wiki_tool, reasoning_tool],
     llm=llm,
@@ -73,7 +72,7 @@ agent = initialize_agent(
     handle_parsing_errors=True,
 )
 
-# Session history
+# ---------------- Session History ----------------
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hi! Ask me any math or general question."}]
 
@@ -81,7 +80,7 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# User input
+# ---------------- User Input ----------------
 question = st.chat_input("Enter your question:")
 
 if question:
@@ -89,17 +88,23 @@ if question:
     st.chat_message("user").write(question)
 
     with st.spinner("Thinking..."):
-        st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
         try:
-            # Recommended replacement for .run()
-            response = agent.invoke({"input": question}, config={"callbacks": [st_cb]})
-            if isinstance(response, dict):
-                response = response.get("output", "No response.")
+            # Expanded math keywords
+            math_keywords = [
+                "age", "solve", "years", "equation", "times", "+", "-", "*", "/", "find",
+                "add", "sum", "difference", "product", "number", "value", "math"
+            ]
+
+            if any(word in question.lower() for word in math_keywords):
+                # Directly solve math with reasoning
+                response = reasoning_chain.invoke({"question": question}).content.strip()
+            else:
+                # Use agent (Wikipedia/general queries)
+                resp = agent.invoke({"input": question})
+                response = resp.get("output", str(resp)) if isinstance(resp, dict) else str(resp)
+
         except Exception as e:
-            response = "Sorry, something went wrong while processing your question."
-            st.error(str(e))
+            response = f"⚠ Sorry, an error occurred: {str(e)}"
 
     st.chat_message("assistant").write(response)
     st.session_state.messages.append({"role": "assistant", "content": response})
-
-
